@@ -10,6 +10,7 @@ const navItems = [
   { href: '/verify/multilingual', label: '多言語' },
   { href: '/verify/vision', label: 'ビジョン' },
   { href: '/verify/long-context', label: '長文コンテキスト' },
+  { href: '/verify/minutes', label: '議事録作成' },
 ];
 
 export function NavSidebar() {

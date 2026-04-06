@@ -32,6 +32,11 @@ const verifyPages = [
     title: '長文コンテキスト',
     description: '長文文書の要約・QAの検証',
   },
+  {
+    href: '/verify/minutes',
+    title: '議事録作成',
+    description: '音声ファイルから議事録を自動生成',
+  },
 ];
 
 export default function Home() {
