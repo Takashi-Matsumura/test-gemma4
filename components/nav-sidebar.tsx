@@ -17,12 +17,20 @@ export function NavSidebar() {
 
   return (
     <nav className="flex w-56 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
-      <Link
-        href="/"
-        className="border-b border-zinc-200 px-4 py-3 text-sm font-bold text-zinc-900 dark:border-zinc-800 dark:text-zinc-100"
-      >
-        Gemma 4 Verification
-      </Link>
+      <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <Link
+          href="/"
+          className="text-sm font-bold text-zinc-900 dark:text-zinc-100"
+        >
+          Gemma 4 Verification
+        </Link>
+        <Link
+          href="/"
+          className="mt-1 flex items-center gap-1 text-xs text-zinc-500 hover:text-blue-600 dark:text-zinc-400 dark:hover:text-blue-400"
+        >
+          <span aria-hidden="true">&larr;</span> ダッシュボードに戻る
+        </Link>
+      </div>
       <div className="flex flex-col gap-1 p-2">
         {navItems.map((item) => {
           const active = pathname === item.href;
