@@ -11,6 +11,7 @@ const navItems = [
   { href: '/verify/vision', label: 'ビジョン' },
   { href: '/verify/long-context', label: '長文コンテキスト' },
   { href: '/verify/minutes', label: '議事録作成' },
+  { href: '/verify/facilitation', label: 'ファシリテーション' },
 ];
 
 export function NavSidebar() {

@@ -37,6 +37,11 @@ const verifyPages = [
     title: '議事録作成',
     description: '音声ファイルから議事録を自動生成',
   },
+  {
+    href: '/verify/facilitation',
+    title: 'ファシリテーション支援',
+    description: 'リアルタイム文字起こし + AI による会議進行アドバイス',
+  },
 ];
 
 export default function Home() {
