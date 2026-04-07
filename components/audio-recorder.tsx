@@ -7,6 +7,8 @@ interface AudioRecorderProps {
   sessionId: string;
   onTranscript: (chunkText: string, fullTranscript: string, chunkIndex: number, processingTimeMs: number) => void;
   onError: (error: string) => void;
+  onRecordingStart?: () => void;
+  onRecordingStop?: () => void;
   chunkIntervalMs?: number;
 }
 
@@ -14,6 +16,8 @@ export function AudioRecorder({
   sessionId,
   onTranscript,
   onError,
+  onRecordingStart,
+  onRecordingStop,
   chunkIntervalMs = 5000,
 }: AudioRecorderProps) {
   const [isRecording, setIsRecording] = useState(false);
@@ -118,6 +122,7 @@ export function AudioRecorder({
       setIsPaused(false);
       setElapsed(0);
       setChunkCount(0);
+      onRecordingStart?.();
     } catch (err) {
       onError(
         err instanceof Error
@@ -125,7 +130,7 @@ export function AudioRecorder({
           : 'マイクへのアクセスが拒否されました',
       );
     }
-  }, [chunkIntervalMs, sendChunk, onError]);
+  }, [chunkIntervalMs, sendChunk, onError, onRecordingStart]);
 
   const stopRecording = useCallback(() => {
     // Flush remaining audio
@@ -133,7 +138,8 @@ export function AudioRecorder({
     setTimeout(() => cleanup(), 200);
     setIsRecording(false);
     setIsPaused(false);
-  }, [cleanup]);
+    onRecordingStop?.();
+  }, [cleanup, onRecordingStop]);
 
   const togglePause = useCallback(() => {
     const ctx = audioContextRef.current;
