@@ -6,8 +6,11 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { AudioRecorder } from '@/components/audio-recorder';
 import { MarkdownRenderer } from '@/components/markdown-renderer';
 import { StreamingIndicator } from '@/components/streaming-indicator';
+import { MinutesDisplay } from '@/components/minutes-display';
+import { CopyButtons } from '@/components/copy-buttons';
+import { useMinutesGeneration } from '@/hooks/use-minutes-generation';
 
-type MeetingPhase = 'setup' | 'in-progress' | 'summary';
+type MeetingPhase = 'setup' | 'in-progress' | 'summary' | 'generating-minutes';
 
 interface MeetingMetadata {
   topic?: string;
@@ -30,6 +33,7 @@ const SETUP_QUESTIONS = [
 export default function FacilitationPage() {
   const [sessionId] = useState(() => crypto.randomUUID());
   const [transcript, setTranscript] = useState('');
+  const [transcriptChunks, setTranscriptChunks] = useState<string[]>([]);
   const [lastChunkText, setLastChunkText] = useState('');
   const [chunkStats, setChunkStats] = useState<{ index: number; timeMs: number } | null>(null);
   const [recorderError, setRecorderError] = useState<string | null>(null);
@@ -38,12 +42,18 @@ export default function FacilitationPage() {
   const transcriptRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Timing
+  const [recordingElapsed, setRecordingElapsed] = useState(0);
+  const [totalTranscribeMs, setTotalTranscribeMs] = useState(0);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Meeting phase & metadata
   const [meetingPhase, setMeetingPhase] = useState<MeetingPhase>('setup');
   const [meetingMetadata, setMeetingMetadata] = useState<MeetingMetadata>({});
   const [setupStep, setSetupStep] = useState(0);
   const [setupInput, setSetupInput] = useState('');
   const [isRecordingStopped, setIsRecordingStopped] = useState(false);
+  const { minutesText, progress: minutesProgress, timing: minutesTiming, minutesError, generateMinutes, resetMinutes } = useMinutesGeneration();
 
   // Refs for dynamic body in transport
   const phaseRef = useRef<MeetingPhase>('setup');
@@ -66,7 +76,7 @@ export default function FacilitationPage() {
       }),
   );
 
-  const { messages, sendMessage, status, error } = useChat({ transport });
+  const { messages, setMessages, sendMessage, status, error } = useChat({ transport });
 
   // Meeting start time for remaining time display
   const meetingStartRef = useRef<number | null>(null);
@@ -75,8 +85,10 @@ export default function FacilitationPage() {
     (chunkText: string, fullTranscript: string, chunkIndex: number, processingTimeMs: number) => {
       setTranscript(fullTranscript);
       transcriptRef.current = fullTranscript;
+      setTranscriptChunks((prev) => [...prev, chunkText]);
       setLastChunkText(chunkText);
       setChunkStats({ index: chunkIndex, timeMs: processingTimeMs });
+      setTotalTranscribeMs((prev) => prev + processingTimeMs);
     },
     [],
   );
@@ -89,10 +101,25 @@ export default function FacilitationPage() {
     setMeetingPhase('in-progress');
     setIsRecordingStopped(false);
     meetingStartRef.current = Date.now();
+    setRecordingElapsed(0);
+    setTotalTranscribeMs(0);
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    recordingTimerRef.current = setInterval(() => {
+      if (meetingStartRef.current) {
+        setRecordingElapsed(Date.now() - meetingStartRef.current);
+      }
+    }, 1000);
   }, []);
 
   const handleRecordingStop = useCallback(() => {
     setIsRecordingStopped(true);
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (meetingStartRef.current) {
+      setRecordingElapsed(Date.now() - meetingStartRef.current);
+    }
   }, []);
 
   const requestAdvice = useCallback(() => {
@@ -103,17 +130,20 @@ export default function FacilitationPage() {
     });
   }, [sendMessage, status]);
 
-  const requestSummary = useCallback(() => {
+  const requestSummary = useCallback(async () => {
     const text = transcriptRef.current.trim();
-    if (!text || status !== 'ready') return;
+    if (!text) return;
+    setMeetingPhase('generating-minutes');
+    await generateMinutes(text, metadataRef.current);
     setMeetingPhase('summary');
-    // Use setTimeout to ensure phaseRef is updated before sendMessage
-    setTimeout(() => {
-      sendMessage({
-        text: `以下は会議の全文字起こしです。詳細な議事録を作成してください。\n\n---\n${text}\n---`,
-      });
-    }, 0);
-  }, [sendMessage, status]);
+  }, [generateMinutes]);
+
+  // Cleanup recording timer on unmount
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    };
+  }, []);
 
   // Auto-advice timer — only during in-progress phase
   useEffect(() => {
@@ -160,11 +190,45 @@ export default function FacilitationPage() {
     setSetupStep(SETUP_QUESTIONS.length);
   }, []);
 
+  const resetAll = useCallback(() => {
+    setTranscript('');
+    setTranscriptChunks([]);
+    transcriptRef.current = '';
+    setLastChunkText('');
+    setChunkStats(null);
+    setRecorderError(null);
+    setAutoAdvice(false);
+    setRecordingElapsed(0);
+    setTotalTranscribeMs(0);
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    meetingStartRef.current = null;
+    setMeetingPhase('setup');
+    setMeetingMetadata({});
+    setSetupStep(0);
+    setSetupInput('');
+    setIsRecordingStopped(false);
+    setMessages([]);
+    resetMinutes();
+  }, [setMessages, resetMinutes]);
+
+  const formatDuration = (ms: number): string => {
+    if (ms < 1000) return `${ms}ms`;
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}秒`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem > 0 ? `${m}分${rem}秒` : `${m}分`;
+  };
+
   // Phase badge
   const phaseBadge = {
     setup: { label: 'セットアップ', color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' },
     'in-progress': { label: '会議中', color: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' },
-    summary: { label: '議事録作成', color: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
+    'generating-minutes': { label: '議事録生成中...', color: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' },
+    summary: { label: '議事録完成', color: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
   }[meetingPhase];
 
   const lastMessage = messages.at(-1);
@@ -231,13 +295,22 @@ export default function FacilitationPage() {
                 </button>
               </>
             )}
-            {isRecordingStopped && meetingPhase !== 'summary' && transcript.trim() && (
+            {isRecordingStopped && meetingPhase !== 'summary' && meetingPhase !== 'generating-minutes' && transcript.trim() && (
               <button
                 onClick={requestSummary}
-                disabled={status !== 'ready'}
+                disabled={minutesProgress.phase === 'extracting' || minutesProgress.phase === 'generating'}
                 className="rounded-xl bg-purple-600 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
               >
                 議事録を生成
+              </button>
+            )}
+            {meetingPhase !== 'setup' && (
+              <button
+                onClick={resetAll}
+                disabled={status === 'streaming' || minutesProgress.phase === 'extracting' || minutesProgress.phase === 'generating'}
+                className="rounded-xl border border-zinc-300 px-3 py-1.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+              >
+                リセット
               </button>
             )}
           </div>
@@ -264,27 +337,42 @@ export default function FacilitationPage() {
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
               文字起こし
               {transcript && ` (${transcript.length} 文字)`}
+              {recordingElapsed > 0 && (
+                <span className="ml-2 font-normal text-zinc-400">
+                  録音: {formatDuration(recordingElapsed)}
+                </span>
+              )}
             </span>
-            {chunkStats && (
-              <span className="text-xs text-zinc-400">
-                #{chunkStats.index} — {chunkStats.timeMs}ms
-              </span>
-            )}
+            <div className="flex items-center gap-3 text-xs text-zinc-400">
+              {totalTranscribeMs > 0 && (
+                <span>処理合計: {formatDuration(totalTranscribeMs)}</span>
+              )}
+              {chunkStats && (
+                <span>
+                  #{chunkStats.index} — {chunkStats.timeMs}ms
+                </span>
+              )}
+              {transcriptChunks.length > 0 && (
+                <CopyButtons markdown={transcriptChunks.join('\n')} />
+              )}
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-4">
-            {!transcript && (
+            {transcriptChunks.length === 0 && (
               <p className="text-center text-sm text-zinc-400 dark:text-zinc-500 mt-8">
                 録音を開始すると、ここに文字起こしが表示されます
               </p>
             )}
-            {transcript && (
-              <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
-                {transcript}
-                {lastChunkText && (
-                  <span className="bg-yellow-100 dark:bg-yellow-900/30">
-                    {/* highlight effect fades naturally on next render */}
-                  </span>
-                )}
+            {transcriptChunks.length > 0 && (
+              <div className="space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
+                {[...transcriptChunks].reverse().map((chunk, i) => (
+                  <div
+                    key={transcriptChunks.length - 1 - i}
+                    className={`whitespace-pre-wrap rounded px-2 py-1 ${i === 0 ? 'bg-yellow-50 dark:bg-yellow-900/20' : ''}`}
+                  >
+                    {chunk}
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -296,7 +384,7 @@ export default function FacilitationPage() {
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
               {meetingPhase === 'setup'
                 ? '会議セットアップ'
-                : meetingPhase === 'summary'
+                : meetingPhase === 'summary' || meetingPhase === 'generating-minutes'
                   ? '議事録'
                   : 'AI アドバイス'}
             </span>
@@ -384,14 +472,12 @@ export default function FacilitationPage() {
               </div>
             )}
 
-            {/* In-Progress & Summary Phase — show AI messages */}
-            {meetingPhase !== 'setup' && (
+            {/* In-Progress Phase — show AI advice messages */}
+            {meetingPhase === 'in-progress' && (
               <>
                 {messages.length === 0 && !showIndicator && (
                   <p className="text-center text-sm text-zinc-400 dark:text-zinc-500 mt-8">
-                    {meetingPhase === 'in-progress'
-                      ? '「アドバイス取得」を押すか、自動アドバイスを有効にしてください'
-                      : '議事録を生成中...'}
+                    「アドバイス取得」を押すか、自動アドバイスを有効にしてください
                   </p>
                 )}
                 {messages.map((message) => {
@@ -411,6 +497,11 @@ export default function FacilitationPage() {
                 })}
                 {showIndicator && <StreamingIndicator status={status} />}
               </>
+            )}
+
+            {/* Minutes generation & summary phases */}
+            {(meetingPhase === 'generating-minutes' || meetingPhase === 'summary') && (
+              <MinutesDisplay text={minutesText} progress={minutesProgress} timing={minutesTiming} error={minutesError} />
             )}
           </div>
         </div>
